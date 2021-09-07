@@ -9,10 +9,11 @@ import {
   KeyPair,
   ParseTransactionOptions,
   ParsedTransaction,
-  VerifyTransactionOptions,
   VerifyAddressOptions as BaseVerifyAddressOptions,
   HalfSignedAccountTransaction as BaseHalfSignedTransaction,
   SignTransactionOptions as BaseSignTransactionOptions,
+  VerificationOptions,
+  VerifyTransactionOptions as BaseVerifyTransactionOptions,
 } from '../baseCoin';
 import { NodeCallback } from '../types';
 import { BigNumber } from 'bignumber.js';
@@ -28,6 +29,8 @@ import { InvalidAddressError, UnexpectedAddressError } from '../../errors';
 import { Environments } from '../environments';
 import * as request from 'superagent';
 import { checkKrsProvider, getBip32Keys, getIsKrsRecovery, getIsUnsignedSweep } from '../recovery/initiate';
+import { Wallet } from '../wallet';
+import { RequestTracer } from '../internal/util';
 
 interface AddressDetails {
   address: string;
@@ -70,6 +73,14 @@ export interface EosSignTransactionParams extends BaseSignTransactionOptions {
   prv: string;
   txPrebuild: EosTransactionPrebuild;
   recipients: Recipient[];
+}
+
+export interface EosVerifyTransactionOptions extends BaseVerifyTransactionOptions {
+  txPrebuild: EosTransactionPrebuild;
+  txParams: EosSignTransactionParams;
+  wallet: Wallet;
+  verification?: VerificationOptions;
+  reqId?: RequestTracer;
 }
 
 export interface EosHalfSigned {
@@ -871,8 +882,52 @@ export class Eos extends BaseCoin {
     return Bluebird.resolve({}).asCallback(callback);
   }
 
-  verifyTransaction(params: VerifyTransactionOptions, callback?: NodeCallback<boolean>): Bluebird<boolean> {
-    return Bluebird.resolve(true).asCallback(callback);
+  /**
+   * Verify that a transaction prebuild complies with the original intention
+   *
+   * @param params
+   * @param params.txParams params used to build the transaction
+   * @param params.txPrebuild the prebuilt transaction
+   * @param callback
+   */
+  verifyTransaction(params: EosVerifyTransactionOptions, callback?: NodeCallback<boolean>): Bluebird<boolean> {
+    const self = this;
+    return co<boolean>(function* () {
+      const { txParams: txParams, txPrebuild: txPrebuild } = params;
+
+      // check if transaction has a packed_trx
+      if (!txPrebuild.transaction?.packed_trx) {
+        throw new Error('missing required tx prebuild property transaction.packed_trx');
+      }
+
+      if (txParams.recipients && !_.isEqual(txParams.recipients, txPrebuild.recipients)) {
+        throw new Error('recipients in txParams are not the same as recipients in txPrebuild');
+      }
+
+      // construct eos transaction using packed_trx to check headers
+      const transactionHeaders = yield self.getTransactionHeadersFromNode();
+      const eosClient = new EosJs({ chainId: self.getChainId(), transactionHeaders });
+      const eosTxStruct = eosClient.fc.structs.transaction;
+      const serializedTxBuffer = Buffer.from(txPrebuild.transaction.packed_trx, 'hex');
+      const tx = EosJs.modules.Fcbuffer.fromBuffer(eosTxStruct, serializedTxBuffer);
+      const txHeader = {
+        expiration: tx.expiration,
+        ref_block_num: tx.ref_block_num,
+        ref_block_prefix: tx.ref_block_prefix,
+      };
+
+      // the packed_trx drops the milliseconds from the headers.expiration timestamp,
+      // but the platform doesn't. Therefore we drop the last 4 characters from the timestamp.
+      txParams.txPrebuild.headers.expiration = txParams.txPrebuild.headers.expiration?.slice(0, -4);
+
+      if (!_.isEqual(txParams.txPrebuild.headers, txHeader)) {
+        throw new Error('txHeaders in txParams are not the same as the ones from built transaction');
+      }
+
+      return true;
+    })
+      .call(this)
+      .asCallback(callback);
   }
 
   /**
