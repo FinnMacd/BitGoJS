@@ -88,7 +88,7 @@ describe('Eth Transaction builder flush native coins', function () {
       const serialized = tx.toBroadcastFormat();
 
       // now rebuild from the signed serialized tx and make sure it stays the same
-      const newTxBuilder: any = getBuilder('eth');
+      const newTxBuilder: any = getBuilder('teth');
       newTxBuilder.from(serialized);
       const newTx = await newTxBuilder.build();
       should.equal(newTx.toBroadcastFormat(), serialized);

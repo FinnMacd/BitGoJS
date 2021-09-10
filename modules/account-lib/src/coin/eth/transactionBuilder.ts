@@ -26,6 +26,7 @@ import {
   isValidEthAddress,
 } from './utils';
 import { walletSimpleByteCode, walletSimpleConstructor } from './walletUtil';
+import { addHexPrefix } from 'ethereumjs-util';
 
 const DEFAULT_M = 3;
 
@@ -414,6 +415,7 @@ export class TransactionBuilder extends BaseTransactionBuilder {
       chainId: this._common.chainId().toString(),
       value: this._value,
       to: this._contractAddress,
+      v:  addHexPrefix((this._common.chainId() * 2 + 35).toString(16)),
     };
   }
   // endregion
